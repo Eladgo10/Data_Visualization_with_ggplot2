@@ -1,0 +1,188 @@
+---
+title: "Spotify Data Visualization"
+author: "Elad Golan"
+date: '2022-05-23'
+output: html_document
+---
+
+```{r, results='hide', warning=FALSE}
+# install.packages(c("tidyverse", "ggmosaic", "glue", "tidymodels", "glmnet", "randomForest", "kernlab"))
+library(tidyverse)
+library(ggmosaic)
+library(glue)
+library(tidymodels)
+library(kernlab)
+library(ggradar)
+library(ragg)
+library(showtext)
+library(tvthemes)
+library(caret)
+library(ggwordcloud)
+library(tm)
+library(stringi)
+```
+
+https://github.com/rfordatascience/tidytuesday/tree/master/data/2020/2020-01-21
+
+```{r}
+spotify_songs <- read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-21/spotify_songs.csv')
+
+spotify_songs %>% count(playlist_genre)
+```
+**Attention**: Apparently each song can repeat a few times with a few genres!
+
+```{r}
+spotify_songs %>% count(track_id, sort = TRUE)
+```
+
+You can either ignore this for now or sample a genre for each song, e.g. with:
+
+```{r}
+spotify_songs <- spotify_songs %>%
+  group_by(track_id) %>%
+  slice_sample(n = 1) %>%
+  ungroup()
+```
+
+```{r}
+spotify_songs %>%
+  group_by(playlist_genre) %>%
+  summarise(mean_modality = mean(mode)) %>%
+  arrange(mean_modality) %>%
+  pull(playlist_genre) -> genres_sorted_by_mode
+
+spotify_songs %>%
+  mutate(
+    genre = fct_relevel(playlist_genre, genres_sorted_by_mode),
+    modality = factor(ifelse(mode == 1, "Major", "Minor"))
+  ) %>%
+  ggplot() +
+  geom_mosaic(aes(x = product(modality, genre), fill = modality), na.rm = TRUE) + 
+  labs(x = "", y = "", title="Modality by Genre", caption = "Data: ~28K Spotify songs") +
+  guides(fill = "none") +
+  scale_fill_manual(values = c("#f4c2c2", "#4dc8e9")) +
+  theme_bw() +
+  theme(text = element_text(family = "mono"),
+        axis.text = element_text(size = 12),
+        plot.title = element_text(size = 18))
+```
+
+
+```{r, warning=FALSE}
+# I cut the years into 4-year groups, except for 85-88 which represents a 3-year period.
+ggplot(spotify_songs %>% select(playlist_genre, track_album_release_date, track_popularity) %>%
+  mutate(track_album_release_year = cut(as.numeric(substr(track_album_release_date,1,4)), breaks = 16)) %>%
+  group_by(playlist_genre, track_album_release_year) %>% 
+  summarise(mean_popularity = mean(track_popularity), n = n(),.groups = 'drop') %>% filter(n >=10),
+  aes(track_album_release_year, mean_popularity, size = n, colour = playlist_genre)) + geom_point(alpha = 0.7)  + scale_size_binned(breaks = c(50, 200, 500, 1000),range = c(2, 7)) + scale_color_brewer(palette  = "Dark2")  + scale_color_hue(direction = -1)  + 
+   scale_x_discrete(labels = c("61-65","65-69","69-73", "73-77", "77-81", "81-85", "85-88","88-92", "92-96",
+                               "96-00", "00-04", "04-08", "08-12", "12-16", "16-20")) + 
+  labs(title = "songs` popularity over time by genre", y = "popularity", x="years") + theme_avatar() + 
+  theme(text= element_text(family  = "serif") ,plot.title = element_text(size=14, face="bold", hjust = 0.5),
+        legend.position= "bottom")
+
+
+```
+
+
+```{r}
+font_add_google("pacifico")
+showtext_auto()
+
+ggradar(spotify_songs %>% group_by(playlist_genre) %>% 
+          summarise(across(c(danceability, instrumentalness, speechiness,energy , valence),mean))
+        ,font.radar = "pacifico", group.point.size = 3,  axis.label.size = 4, grid.label.size = 3,
+          values.radar = c("0", "0.425", "0.85"), grid.min = 0, grid.mid = 0.4, grid.max = 0.85,
+        legend.text.size = 10) + labs(title = "Radar plot of songs genre") + 
+  theme(legend.background = element_blank(), legend.key = element_rect(fill = NA, color = NA),
+      plot.background = element_rect(fill = "#fbf9f4", color = "#fbf9f4"),
+      panel.background = element_rect(fill = "#fbf9f4", color = "#fbf9f4"),
+      plot.title.position = "plot",
+      text = element_text( family = "pacifico"),
+      plot.title = element_text(
+        size = 15,
+        face = "bold", 
+        color = "#2a475e"
+    )
+  )
+```
+
+
+
+```{r}
+#filter the atrists' name only for those who their first album release after 2005. 
+
+names_filter <- spotify_songs %>% mutate(as.numeric(substr(track_album_release_date,1,4))) %>%
+  filter(track_album_release_date <= 2005) %>% pull(unique(track_artist))                                              
+
+#build the plot based the name_filter
+p <- ggplot(spotify_songs %>% mutate(type= case_when(grepl(c("Remix"),track_name) | 
+                                              grepl(c("Remix"), track_album_name) ~ "Remix", 
+                                            TRUE ~ "Original")) %>% group_by(track_artist, type) %>%
+  summarise(total_type = n(), .group = 'drop')  %>%  inner_join(spotify_songs %>% group_by(track_artist) %>% 
+                                                 summarise(total_songs = n()), by = "track_artist") %>% 
+  select(track_artist, type, total_type, total_songs) %>% 
+  mutate(ratio = case_when(type == "Remix" ~ paste0(round(total_type/total_songs, 2)*100, "%"), TRUE ~ "")) %>% 
+  filter(total_songs > 30, !track_artist %in% names_filter),
+  aes(x = track_artist, y = total_type ,fill = type))
+  
+p + geom_col(alpha=0.8 , width=.8) + coord_flip() + 
+  geom_text(aes(label=ratio), position =position_stack(vjust = .7)) +
+  scale_fill_brewer(palette = "Dark2", direction = -1) + labs( title = "Successful artist from the 2000s",
+                                                               subtitle = "Remixes & Original" , 
+                                                               x = "", y = "number of songs") + 
+  theme(text = element_text(family = "mono"), plot.title = element_text(face = "bold", hjust = 0.5), 
+        title = element_text(face = "bold"), plot.subtitle = element_text(hjust = 0.5) , 
+        plot.background = element_rect(fill = "#373F61", color = "#373F61"), 
+        panel.background = element_rect(fill = "#373F61", color = "#373F61"), 
+        legend.background = element_rect(fill = "#373F61", color = "#373F61"), 
+        axis.text.x = element_text(color = "white"), axis.text.y = element_text(color = "white"))
+
+```
+
+
+
+```{r}
+p4 <- ggplot(spotify_songs %>% select(track_name,track_album_name, track_popularity) %>% filter(!(grepl(c("feat"),track_album_name) & !grepl(c("feat"),track_name))) %>% mutate(feat = case_when(grepl(c("feat"),track_name) ~ "Collaboration", TRUE ~ "Solo")), aes(track_popularity))
+
+
+p4 + geom_density(aes(fill=feat), alpha=0.8) + labs(title="Density plot", 
+         subtitle="Does collaboration between artists increase the chance that the song will be popular?",
+         x="popularity",
+         fill="")
+
+```
+
+
+```{r, warning=FALSE}
+
+#function for cleaning the songs' names from punctuation, stop words, digits and irrelevant words as Remix, Original etc.
+clean_fun <- function(name){
+  name <- removeWords(stri_replace_all_regex(str_to_lower(name) , 
+                                     c("\\(feat..*","\\feat..*", "\\[feat..*","\\-.*","\\(.*"), "", 
+                                     vectorize=FALSE), stopwords())
+  name <- str_remove_all(name, "[[:punct:]]")
+  return(str_remove_all(name, "[[:digit:]]"))
+}
+
+#applying the clean_fun on pop songs.
+pop_songs_clean <- spotify_songs %>% filter(playlist_genre == "pop") %>%
+  select(track_name) %>%
+  mutate(track_name = clean_fun(track_name)) %>% pull()
+
+#making a DF of the freq of the words in the pop songs' names.
+counter_words <- as.data.frame(table(unlist(strsplit(pop_songs_clean, " "))))
+
+
+set.seed(42) # The way the words appear in the chart is random and we would like to get identical results.
+
+#I filtered for words that appear more than 5 times so that the chart does not become too cluttered.
+counter_words %>% filter(Freq > 5) %>%
+  mutate(angle = 45 * sample(-1:1, n(), replace = TRUE, prob = c(1, 4, 1))) %>% 
+  ggplot(aes(label = Var1, size = Freq, 
+            color = factor(sample.int(10, nrow(counter_words %>% filter(Freq > 5)), replace = TRUE)), 
+            angle = angle)) +
+  geom_text_wordcloud(area_corr_power = 1, eccentricity = 1) +
+  scale_size_area(max_size = 65) +
+  theme_minimal() + labs(title = "pop songs common words") + theme(plot.title = element_text(family = "serif" ,face = "bold", hjust = 0.5))
+```

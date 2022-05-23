@@ -2,7 +2,9 @@
 title: "Spotify Data Visualization"
 author: "Elad Golan"
 date: '2022-05-23'
-output: html_document
+output:
+  pdf_document:
+    latex_engine: xelatex
 ---
 
 ```{r, results='hide', warning=FALSE}
@@ -45,28 +47,15 @@ spotify_songs <- spotify_songs %>%
 ```
 
 ```{r}
-spotify_songs %>%
-  group_by(playlist_genre) %>%
-  summarise(mean_modality = mean(mode)) %>%
-  arrange(mean_modality) %>%
-  pull(playlist_genre) -> genres_sorted_by_mode
+p4 <- ggplot(spotify_songs %>% select(track_name,track_album_name, track_popularity) %>% filter(!(grepl(c("feat"),track_album_name) & !grepl(c("feat"),track_name))) %>% mutate(feat = case_when(grepl(c("feat"),track_name) ~ "Collaboration", TRUE ~ "Solo")), aes(track_popularity))
 
-spotify_songs %>%
-  mutate(
-    genre = fct_relevel(playlist_genre, genres_sorted_by_mode),
-    modality = factor(ifelse(mode == 1, "Major", "Minor"))
-  ) %>%
-  ggplot() +
-  geom_mosaic(aes(x = product(modality, genre), fill = modality), na.rm = TRUE) + 
-  labs(x = "", y = "", title="Modality by Genre", caption = "Data: ~28K Spotify songs") +
-  guides(fill = "none") +
-  scale_fill_manual(values = c("#f4c2c2", "#4dc8e9")) +
-  theme_bw() +
-  theme(text = element_text(family = "mono"),
-        axis.text = element_text(size = 12),
-        plot.title = element_text(size = 18))
+
+p4 + geom_density(aes(fill=feat), alpha=0.8) + labs(title="Density plot", 
+         subtitle="Does collaboration between artists increase the chance that the song will be popular?",
+         x="popularity",
+         fill="")
+
 ```
-
 
 ```{r, warning=FALSE}
 # I cut the years into 4-year groups, except for 85-88 which represents a 3-year period.
@@ -142,16 +131,7 @@ p + geom_col(alpha=0.8 , width=.8) + coord_flip() +
 
 
 
-```{r}
-p4 <- ggplot(spotify_songs %>% select(track_name,track_album_name, track_popularity) %>% filter(!(grepl(c("feat"),track_album_name) & !grepl(c("feat"),track_name))) %>% mutate(feat = case_when(grepl(c("feat"),track_name) ~ "Collaboration", TRUE ~ "Solo")), aes(track_popularity))
 
-
-p4 + geom_density(aes(fill=feat), alpha=0.8) + labs(title="Density plot", 
-         subtitle="Does collaboration between artists increase the chance that the song will be popular?",
-         x="popularity",
-         fill="")
-
-```
 
 
 ```{r, warning=FALSE}
